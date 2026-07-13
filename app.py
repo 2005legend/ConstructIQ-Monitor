@@ -3,9 +3,21 @@ from PIL import Image
 import numpy as np
 import cv2
 import zipfile
+import json
+from datetime import datetime
 from io import BytesIO
 from detect import run_inference
 from progress_tracker import detect_progress_change
+
+def export_report(counts, zones, hazards):
+    report = {
+        "timestamp": datetime.now().isoformat(),
+        "detections": counts,
+        "hazards": hazards,
+        "progress_zones": zones,
+        "overall_change_pct": sum(zones.values()) / len(zones) if zones else 0
+    }
+    return json.dumps(report, indent=2)
 
 st.set_page_config(page_title="SiteVision", layout="wide")
 
@@ -41,11 +53,11 @@ with tab1:
                 
             if run_inference_btn:
                 with st.spinner(f"Running Inference on {uploaded_file.name}..."):
-                    output_image, counts = run_inference(img_array)
-                    st.session_state.results_cache[uploaded_file.name] = (output_image, counts)
+                    output_image, counts, hazards = run_inference(img_array)
+                    st.session_state.results_cache[uploaded_file.name] = (output_image, counts, hazards)
                     
             if uploaded_file.name in st.session_state.results_cache:
-                output_image, counts = st.session_state.results_cache[uploaded_file.name]
+                output_image, counts, hazards = st.session_state.results_cache[uploaded_file.name]
                 with col2:
                     st.image(output_image, caption="Detection Results", use_container_width=True, channels="BGR")
                     
@@ -65,6 +77,20 @@ with tab1:
                         metric_cols[m_idx % len(metric_cols)].metric(label=cls_name, value=count)
                 else:
                     st.info("No objects detected.")
+                    
+                if hazards:
+                    st.error("🚨 Safety Hazards Detected:")
+                    for h in hazards:
+                        st.write(h)
+                
+                report_json = export_report(counts, {}, hazards)
+                st.download_button(
+                    label="📄 Download JSON Report",
+                    data=report_json,
+                    file_name=f"report_{uploaded_file.name}.json",
+                    mime="application/json",
+                    key=f"rep_{idx}_{uploaded_file.name}"
+                )
             
             st.divider()
             
@@ -73,7 +99,7 @@ with tab1:
             with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
                 for f in uploaded_files:
                     if f.name in st.session_state.results_cache:
-                        output_image, _ = st.session_state.results_cache[f.name]
+                        output_image, _, _ = st.session_state.results_cache[f.name]
                         is_success, img_buf = cv2.imencode(".png", output_image)
                         if is_success:
                             zf.writestr(f"result_{f.name}.png", img_buf.tobytes())
@@ -112,14 +138,19 @@ with tab2:
                 img1_array = np.array(img1)
                 img2_array = np.array(img2)
                 
-                diff_image, change_percent = detect_progress_change(img1_array, img2_array)
-                st.session_state.diff_cache['last_run'] = (diff_image, change_percent)
+                diff_image, change_percent, zones = detect_progress_change(img1_array, img2_array)
+                st.session_state.diff_cache['last_run'] = (diff_image, change_percent, zones)
                 
         if 'last_run' in st.session_state.diff_cache:
-            diff_image, change_percent = st.session_state.diff_cache['last_run']
+            diff_image, change_percent, zones = st.session_state.diff_cache['last_run']
             
             st.subheader("Progress Analysis")
             st.metric("Site Area Changed", f"{change_percent:.2f}%")
+            
+            st.write("### Spatial Change Zones")
+            zone_cols = st.columns(3)
+            for idx, (zone, pct) in enumerate(zones.items()):
+                zone_cols[idx % 3].metric(zone, f"{pct}%")
             
             col_res1, col_res2 = st.columns(2)
             with col_res1:
@@ -133,3 +164,12 @@ with tab2:
                         file_name="progress_diff.png",
                         mime="image/png"
                     )
+            
+            with col_res2:
+                report_json = export_report({}, zones, [])
+                st.download_button(
+                    label="📄 Download Progress JSON Report",
+                    data=report_json,
+                    file_name="progress_report.json",
+                    mime="application/json"
+                )

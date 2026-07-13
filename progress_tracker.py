@@ -1,6 +1,17 @@
 import cv2
 import numpy as np
 
+def zone_analysis(diff_mask, grid=3):
+    h, w = diff_mask.shape
+    zones = {}
+    for i in range(grid):
+        for j in range(grid):
+            zone = diff_mask[i*h//grid:(i+1)*h//grid, 
+                           j*w//grid:(j+1)*w//grid]
+            pct = (np.sum(zone > 0) / zone.size) * 100
+            zones[f"Zone({i},{j})"] = round(pct, 2)
+    return zones
+
 def detect_progress_change(img1_array, img2_array):
     """
     Compare two images and detect structural changes.
@@ -42,8 +53,9 @@ def detect_progress_change(img1_array, img2_array):
     # Find contours of changed regions
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
-    # Calculate percentage change
+    # Calculate percentage change and zone analysis
     change_percent = (np.sum(thresh > 0) / thresh.size) * 100
+    zones = zone_analysis(thresh, grid=3)
     
     # Draw contours on the second image for visualization
     # Resize original img2 color for overlay if necessary
@@ -54,4 +66,11 @@ def detect_progress_change(img1_array, img2_array):
     diff_image = img2_color_resized.copy()
     cv2.drawContours(diff_image, contours, -1, (255, 0, 0), 2) # Draw in red
     
-    return diff_image, change_percent
+    # Draw grid lines for zones
+    h, w = diff_image.shape[:2]
+    grid = 3
+    for i in range(1, grid):
+        cv2.line(diff_image, (0, i * h // grid), (w, i * h // grid), (0, 255, 0), 1)
+        cv2.line(diff_image, (i * w // grid, 0), (i * w // grid, h), (0, 255, 0), 1)
+    
+    return diff_image, change_percent, zones
