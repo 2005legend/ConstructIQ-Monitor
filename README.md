@@ -37,15 +37,13 @@ graph TD
 
 ## 📸 Sample Outputs
 
-*(Note: Replace these placeholders with the best results from the 17 images you downloaded!)*
-
-### Object & Safety Detection
+### Object & Safety Detection Example 1
 ![Detection Sample 1](assets/detection_sample_1.png)
 *Figure 1: YOLOv11 successfully identifying workers and PPE compliance.*
 
-### Progress Comparison (Before / After)
-![Progress Sample](assets/progress_sample_1.png)
-*Figure 2: OpenCV pipeline highlighting new structural additions in red.*
+### Object & Safety Detection Example 2
+![Detection Sample 2](assets/detection_sample_2.png)
+*Figure 2: Additional detection highlighting machinery and site entities.*
 
 ## 🚀 Getting Started
 
