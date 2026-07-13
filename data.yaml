@@ -1,0 +1,7 @@
+path: ../archive/css-data
+train: train
+val: valid
+test: test
+
+nc: 10
+names: ['Hardhat', 'Mask', 'NO-Hardhat', 'NO-Mask', 'NO-Safety Vest', 'Person', 'Safety Cone', 'Safety Vest', 'machinery', 'vehicle']
