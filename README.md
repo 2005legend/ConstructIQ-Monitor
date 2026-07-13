@@ -4,6 +4,8 @@ SiteSpectra is an end-to-end computer vision pipeline designed for modern constr
 
 This project was built to simulate a lightweight construction monitoring pipeline, mirroring the reality-capture workflows used by industry leaders like Track3D.
 
+[![Hugging Face](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Model-orange)](https://huggingface.co/sidaarth005/ConstructIQ-Monitor)
+
 ## 🏗️ Core Features
 - **Site Entity & Safety Detection:** Detects workers, machinery, and PPE compliance in real-time. Identifies specific hazard classes like `NO-Hardhat` or `NO-Safety Vest`.
 - **Structural Progress Tracking:** Quantifies visual site changes by computing the structural difference between timestamped before/after images.
@@ -57,8 +59,10 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-### 3. Model Training (Optional)
-The model was fine-tuned on the Construction Site Safety Dataset (2,800+ images) for 20 epochs. To run training on a custom dataset:
+### 3. Model Training & Validation
+The model was fine-tuned on the Construction Site Safety Dataset (2,800+ images) for 20 epochs. It achieved an overall **mAP50 of 80.6%** on the validation set, with high accuracy for critical classes like Hardhats (88.9%) and Machinery (92.0%).
+
+To run training on a custom dataset:
 ```bash
 python train.py
 ```
