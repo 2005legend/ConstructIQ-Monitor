@@ -1,5 +1,10 @@
-ultralytics
-streamlit
-opencv-python
-numpy
-Pillow
+ultralytics==8.3.40
+streamlit==1.41.0
+opencv-python==4.10.0.84
+numpy==1.26.4
+Pillow==11.0.0
+pytest==8.3.3
+hypothesis==6.119.4
+scipy==1.13.1
+pycolmap==3.11.1
+plotly==5.24.1

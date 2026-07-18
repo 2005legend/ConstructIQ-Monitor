@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Model weights (large binary files)
+*.pt
+*.pth
+*.onnx
+*.weights
+
+# YOLO run outputs
+runs/
+
+# SfM output (regenerated each run)
+_sfm_output/
+
+# Session data (user data, not source code)
+sessions/
+
+# Test/hypothesis cache
+.hypothesis/
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

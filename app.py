@@ -1,175 +1,148 @@
+import logging
 import streamlit as st
 from PIL import Image
 import numpy as np
-import cv2
-import zipfile
 import json
+import os
 from datetime import datetime
 from io import BytesIO
-from detect import run_inference
-from progress_tracker import detect_progress_change
 
-def export_report(counts, zones, hazards):
-    report = {
-        "timestamp": datetime.now().isoformat(),
-        "detections": counts,
-        "hazards": hazards,
-        "progress_zones": zones,
-        "overall_change_pct": sum(zones.values()) / len(zones) if zones else 0
-    }
-    return json.dumps(report, indent=2)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+logger = logging.getLogger("SiteVision")
 
-st.set_page_config(page_title="SiteVision", layout="wide")
+from detection.detector import detect_objects, identify_violations, calculate_ppe_coverage
+from sfm.reconstructor import reconstruct_3d
+from fusion.projector import project_to_3d, overlay_violations_3d
+from progress.tracker import compare_point_clouds
+from session_manager import SessionManager
+from app_helpers import _parse_ply_bytes, _build_reconstruction_figure
 
-st.title("🚧 SiteVision: Construction Site Monitor")
-st.markdown("Monitor construction site safety and structural progress using computer vision.")
+# --- Streamlit Config ---
+st.set_page_config(page_title="SiteVision: Unified Pipeline", layout="wide")
+st.title("🚧 SiteVision: Unified Session Pipeline")
 
-tab1, tab2 = st.tabs(["Object & Safety Detection", "Progress Tracking (Frame-Diff)"])
+# Initialize session state for cached views
+if "current_session_id" not in st.session_state:
+    st.session_state.current_session_id = None
+
+tab1, tab2 = st.tabs(["🏗️ New Site Visit (Unified Analysis)", "📈 3D Progress Tracking"])
 
 with tab1:
-    st.header("👷 Object & Safety Detection")
-    st.markdown("Upload a site image to detect workers, machinery, and PPE compliance.")
+    st.header("New Site Visit Session")
+    st.markdown("Upload overlapping photos. The system will automatically build the 3D structure and map safety violations into it using exactly the same camera poses.")
     
-    uploaded_files = st.file_uploader("Choose up to 5 images...", type=["jpg", "jpeg", "png"], accept_multiple_files=True, key="detect_uploader")
+    files = st.file_uploader("Upload Overlapping Drone/Walkthrough Photos", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
     
-    if uploaded_files:
-        if len(uploaded_files) > 5:
-            st.warning("You uploaded more than 5 images. Only the first 5 will be processed.")
-            uploaded_files = uploaded_files[:5]
-            
-        if "results_cache" not in st.session_state:
-            st.session_state.results_cache = {}
-            
-        run_inference_btn = st.button("Run Detection")
-        
-        for idx, uploaded_file in enumerate(uploaded_files):
-            st.markdown(f"### {uploaded_file.name}")
-            image = Image.open(uploaded_file)
-            img_array = np.array(image)
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                st.image(image, caption="Uploaded Image", use_container_width=True)
+    if files and len(files) >= 2:
+        if st.button("🚀 Process Unified Session"):
+            with st.spinner("Creating session..."):
+                file_bytes = [(f.name, f.read()) for f in files]
+                session = SessionManager.create_session(file_bytes)
+                st.session_state.current_session_id = session.session_id
                 
-            if run_inference_btn:
-                with st.spinner(f"Running Inference on {uploaded_file.name}..."):
-                    output_image, counts, hazards = run_inference(img_array)
-                    st.session_state.results_cache[uploaded_file.name] = (output_image, counts, hazards)
-                    
-            if uploaded_file.name in st.session_state.results_cache:
-                output_image, counts, hazards = st.session_state.results_cache[uploaded_file.name]
-                with col2:
-                    st.image(output_image, caption="Detection Results", use_container_width=True, channels="BGR")
-                    
-                    is_success, buffer = cv2.imencode(".png", output_image)
-                    if is_success:
-                        st.download_button(
-                            label="⬇️ Download Result",
-                            data=buffer.tobytes(),
-                            file_name=f"result_{uploaded_file.name}",
-                            mime="image/png",
-                            key=f"dl_{idx}_{uploaded_file.name}"
-                        )
-                
-                if counts:
-                    metric_cols = st.columns(len(counts))
-                    for m_idx, (cls_name, count) in enumerate(counts.items()):
-                        metric_cols[m_idx % len(metric_cols)].metric(label=cls_name, value=count)
-                else:
-                    st.info("No objects detected.")
-                    
-                if hazards:
-                    st.error("🚨 Safety Hazards Detected:")
-                    for h in hazards:
-                        st.write(h)
-                
-                report_json = export_report(counts, {}, hazards)
-                st.download_button(
-                    label="📄 Download JSON Report",
-                    data=report_json,
-                    file_name=f"report_{uploaded_file.name}.json",
-                    mime="application/json",
-                    key=f"rep_{idx}_{uploaded_file.name}"
-                )
+            progress_bar = st.progress(0, text="Step 1: Reconstructing 3D Space (COLMAP)...")
+            out_dir = os.path.join(SessionManager.get_session_dir(session.session_id), "colmap")
             
-            st.divider()
+            # 1. Run COLMAP
+            result = reconstruct_3d(session.image_paths, out_dir)
+            session.reconstruction = result
             
-        if any(f.name in st.session_state.results_cache for f in uploaded_files):
-            zip_buffer = BytesIO()
-            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-                for f in uploaded_files:
-                    if f.name in st.session_state.results_cache:
-                        output_image, _, _ = st.session_state.results_cache[f.name]
-                        is_success, img_buf = cv2.imencode(".png", output_image)
-                        if is_success:
-                            zf.writestr(f"result_{f.name}.png", img_buf.tobytes())
-                            
-            st.download_button(
-                label="📦 Download All Results (ZIP)",
-                data=zip_buffer.getvalue(),
-                file_name="all_detection_results.zip",
-                mime="application/zip",
-                use_container_width=True,
-                type="primary"
-            )
+            progress_bar.progress(50, text="Step 2: Running AI Object Detection (YOLO)...")
+            
+            # 2. Run Object Detection on the exact same session photos
+            all_violations = []
+            poses_dict = {os.path.basename(p.image_id): p for p in result.camera_poses} if result.success else {}
+            
+            for img_path in session.image_paths:
+                img_name = os.path.basename(img_path)
+                img_array = np.array(Image.open(img_path).convert("RGB"))
+                
+                detections, _ = detect_objects(img_array, conf_threshold=0.3)
+                calculate_ppe_coverage(detections)
+                violations = identify_violations(detections)
+                
+                # 3. Fuse: Project violations into 3D immediately
+                for v in violations:
+                    v.image_id = img_name
+                    if result.success and img_name in poses_dict:
+                        pose = poses_dict[img_name]
+                        v.location_3d = project_to_3d(v.location_2d, pose, depth=5.0)
+                all_violations.extend(violations)
+                
+            session.violations = all_violations
+            SessionManager.save_session(session)
+            
+            progress_bar.progress(100, text="Done!")
+            st.success(f"✅ Session Processed! {len(result.camera_poses)} cameras recovered, {len(all_violations)} violations found.")
+            
+    # Render active session
+    if st.session_state.current_session_id:
+        session = SessionManager.load_session(st.session_state.current_session_id)
+        if session and session.reconstruction and session.reconstruction.success:
+            st.subheader(f"Session Results: {session.session_id}")
+
+            # Initialize to empty arrays — used even when PLY is absent (cameras-only view)
+            xyz = np.empty((0, 3))
+            rgb = np.empty((0, 3), dtype=np.uint8)
+
+            if session.reconstruction.point_cloud_path and os.path.exists(session.reconstruction.point_cloud_path):
+                with open(session.reconstruction.point_cloud_path, "rb") as f:
+                    xyz, rgb = _parse_ply_bytes(f.read())
+            else:
+                st.info("⚠️ Point cloud file not found on disk. Showing camera positions only.")
+
+            import plotly.graph_objects as go
+            fig = _build_reconstruction_figure(xyz, rgb, session.reconstruction.camera_poses)
+
+            # Add violations to 3D plot
+            markers = overlay_violations_3d(None, session.violations)
+            if markers["3d_markers"]:
+                fig.add_trace(go.Scatter3d(
+                    x=[m["position"][0] for m in markers["3d_markers"]],
+                    y=[m["position"][1] for m in markers["3d_markers"]],
+                    z=[m["position"][2] for m in markers["3d_markers"]],
+                    mode="markers+text",
+                    marker=dict(size=12, color=[m["color"] for m in markers["3d_markers"]], symbol="circle", line=dict(color="white", width=2)),
+                    text=[m["type"].replace("_", " ").title() for m in markers["3d_markers"]],
+                    name="Safety Violations"
+                ))
+            st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("📂 Upload images above and click **Process Unified Session** to start a new site visit.")
 
 with tab2:
-    st.header("📈 Progress Tracking")
-    st.markdown("Upload two timestamped images of the same site to detect structural changes.")
+    st.header("3D Progress Tracking (ICP)")
+    st.markdown("Select two past sessions. The system will align their 3D point clouds and highlight new structural progress.")
     
-    col1, col2 = st.columns(2)
-    with col1:
-        img1_file = st.file_uploader("Upload Image 1 (Before)", type=["jpg", "jpeg", "png"])
-    with col2:
-        img2_file = st.file_uploader("Upload Image 2 (After)", type=["jpg", "jpeg", "png"])
+    sessions = SessionManager.list_sessions()
+    if len(sessions) >= 2:
+        col1, col2 = st.columns(2)
+        s1_id = col1.selectbox("Past Session (Baseline)", sessions, index=len(sessions)-1)
+        s2_id = col2.selectbox("Recent Session (Current)", sessions, index=0)
+
+        threshold = st.slider("Distance threshold (meters)", 0.05, 1.0, 0.1, 0.05)
         
-    if img1_file and img2_file:
-        img1 = Image.open(img1_file)
-        img2 = Image.open(img2_file)
-        
-        col1.image(img1, caption="Before", use_container_width=True)
-        col2.image(img2, caption="After", use_container_width=True)
-        
-        if "diff_cache" not in st.session_state:
-            st.session_state.diff_cache = {}
-            
-        if st.button("Compare Frames"):
-            with st.spinner("Computing structural differences..."):
-                img1_array = np.array(img1)
-                img2_array = np.array(img2)
+        if st.button("Compare 3D Progress"):
+            if s1_id == s2_id:
+                st.warning("Please select two different sessions to compare.")
+            else:
+                s1 = SessionManager.load_session(s1_id)
+                s2 = SessionManager.load_session(s2_id)
                 
-                diff_image, change_percent, zones = detect_progress_change(img1_array, img2_array)
-                st.session_state.diff_cache['last_run'] = (diff_image, change_percent, zones)
-                
-        if 'last_run' in st.session_state.diff_cache:
-            diff_image, change_percent, zones = st.session_state.diff_cache['last_run']
-            
-            st.subheader("Progress Analysis")
-            st.metric("Site Area Changed", f"{change_percent:.2f}%")
-            
-            st.write("### Spatial Change Zones")
-            zone_cols = st.columns(3)
-            for idx, (zone, pct) in enumerate(zones.items()):
-                zone_cols[idx % 3].metric(zone, f"{pct}%")
-            
-            col_res1, col_res2 = st.columns(2)
-            with col_res1:
-                st.image(diff_image, caption="Highlighted Changes (Red)", use_container_width=True)
-                
-                is_success, buffer = cv2.imencode(".png", cv2.cvtColor(diff_image, cv2.COLOR_RGB2BGR))
-                if is_success:
-                    st.download_button(
-                        label="⬇️ Download Diff Image",
-                        data=buffer.tobytes(),
-                        file_name="progress_diff.png",
-                        mime="image/png"
-                    )
-            
-            with col_res2:
-                report_json = export_report({}, zones, [])
-                st.download_button(
-                    label="📄 Download Progress JSON Report",
-                    data=report_json,
-                    file_name="progress_report.json",
-                    mime="application/json"
-                )
+                if s1.reconstruction and s2.reconstruction and s1.reconstruction.success and s2.reconstruction.success:
+                    with st.spinner("Aligning point clouds..."):
+                        with open(s1.reconstruction.point_cloud_path, "rb") as f:
+                            xyz1, rgb1 = _parse_ply_bytes(f.read())
+                        with open(s2.reconstruction.point_cloud_path, "rb") as f:
+                            xyz2, rgb2 = _parse_ply_bytes(f.read())
+                            
+                        aligned_xyz2, added_points, pct_change = compare_point_clouds(xyz1, xyz2, threshold=threshold)
+                        
+                        st.metric("Volumetric Progress / Structural Change", f"{pct_change}%")
+                        
+                        fig = _build_reconstruction_figure(xyz1, rgb1, None, added_points=added_points)
+                        st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.error("Both sessions must have successful 3D reconstructions to compare.")
+    else:
+        st.info("You need at least 2 processed sessions to track progress.")
